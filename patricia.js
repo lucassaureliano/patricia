@@ -111,8 +111,27 @@ client.on('group_join', async (notification) => {
     }
 });
 
+client.on('message_create', async (msg) => {
+    if (!msg.fromMe) {
+        try {
+            // Obter o objeto de chat pelo ID
+            const chat = await msg.getChat();
+            const chatId = chat.id._serialized;
+      
+            const mensagensObtidas = await chat.fetchMessages({limit: 2});
+      if(mensagensObtidas.length === 1) {
+              console.log("Novo usuário")
+
+      await msg.reply(BOAS_VINDAS)
+    }
+} catch(err) {
+    console.error("Erro ao obter histórico do Whatsapp")
+}
+}
+  });
 
 client.on('message', async msg => {
+
     if (msg.hasMedia) {
         const media = await msg.downloadMedia();
         if (!media || !media.data) {
@@ -158,6 +177,7 @@ client.on('message', async msg => {
 
         }
     }
+    
 });
 
 client.initialize();
