@@ -1,15 +1,19 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const crypto = require('crypto');
+
 require('dotenv').config();
+
+
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const model = genAI.getGenerativeModel({
     model: "gemini-2.0-flash",
     generationConfig: {
         temperature: 0.5,
         maxOutputTokens: 1024,
-        topP: 1.0,
-        topK: 40
+        topP: 0.9,
+        topK: 10
     }
 });
 const mime = require('mime-types');
@@ -27,6 +31,8 @@ client.on('ready', () => {
     console.log('Autenticado com sucesso.');
 });
 
+
+let lastProcessedAudio = null
 const BOAS_VINDAS = `Olá! Eu sou a Patricia.
 Fui criada para transcrever e descrever os áudios e as imagens enviadas.
 
@@ -68,9 +74,43 @@ async function descreveImagem(imgBase64, mimeType) {
     }
 }
 
-client.on('chat_added', async (chat) => {
-    await client.sendMessage(chat.id, BOAS_VINDAS);
+
+async function descreveAudio(audioBase64, mimeType) {
+    try {
+        const result = await model.generateContent({
+            contents: [
+                {
+                    role: "user",
+                    parts: [
+                        {
+                            inlineData: {
+                                mimeType: mimeType,
+                                data: audioBase64
+                            }
+                        },
+                        {
+                            text: "Transcreva o áudio de forma fiel, eliminando apenas elementos que não contribuem para o significado da mensagem, como hesitações e palavras de preenchimento. A pontuação original deve ser preservada."
+                        }
+                    ]
+                }
+            ]
+        });
+
+        return result.response.text();
+    } catch (error) {
+        console.error("Erro ao descrever o áudio:", error);
+        return "Desculpe, não consegui descrever o áudio.";
+    }
+}
+
+client.on('group_join', async (notification) => {
+    if (notification.recipientIds.includes(client.info.wid._serialized)) {
+        const chat = await notification.getChat();
+        console.log("entrou no grupo")
+        await chat.sendMessage(BOAS_VINDAS);
+    }
 });
+
 
 client.on('message', async msg => {
     if (msg.hasMedia) {
@@ -89,8 +129,33 @@ client.on('message', async msg => {
                 await msg.reply("Ocorreu um erro ao analisar a imagem.");
             }
         } else if (media.mimetype.startsWith('audio/')) {
-            console.log("Recebi um áudio. TODO: Implementar transcrição.");
-            // TODO: Implementar transcrição do áudio
+            try {
+                const audioSizeInMB = media.data.length / (1024 * 1024);
+                if (audioSizeInMB > 20) {
+                    await msg.reply('Desculpe, só posso processar áudios de até 20MB.');
+                    return;
+                }
+
+                const isPTT = media.mimetype === 'audio/ogg; codecs=opus';
+                console.debug(`Processando arquivo de áudio: ${isPTT ? 'PTT' : 'Áudio regular'}`);
+
+                const audioHash = crypto.createHash('md5').update(media.data).digest('hex');
+                if (lastProcessedAudio === audioHash) {
+                    await msg.reply('Este áudio já foi processado recentemente. Por favor, envie um novo áudio.');
+                    return;
+                }
+                lastProcessedAudio = audioHash;
+
+                const base64AudioFile = media.data.toString('base64');
+                const result = await descreveAudio(base64AudioFile, media.mimetype)
+                await msg.reply(result);
+                console.info(`Áudio processado com sucesso: ${audioHash}`);
+
+            } catch (error) {
+                console.error(`Erro ao processar mensagem de áudio: ${error.message}`, { error });
+                await msg.reply('Desculpe, ocorreu um erro ao processar o áudio.');
+            }
+
         }
     }
 });
